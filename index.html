@@ -342,7 +342,7 @@ input,select,textarea{font-family:inherit;font-size:inherit;color:inherit;}
         <button id="pickCancelBtn" type="button">취소</button>
       </div>
       <div class="legend" id="legend"></div>
-      <div class="attribution">지도 데이터 &copy; OpenStreetMap contributors</div>
+      <div class="attribution" id="mapAttribution">지도 데이터 &copy; OpenStreetMap contributors</div>
     </div>
 
     <aside class="formSide">
@@ -1678,6 +1678,7 @@ function startApp() {
       if (!window.kakao || !window.kakao.maps) throw new Error("kakao sdk not loaded");
       qs("mapStage").style.display = "none";
       qs("adminMapStage").style.display = "none";
+      if (qs("mapAttribution")) qs("mapAttribution").hidden = true;
       var centerLL = new kakao.maps.LatLng(OSAN_CENTER.lat, OSAN_CENTER.lon);
       kakaoMapMain = new kakao.maps.Map(qs("mapViewport"), { center: centerLL, level: 8 });
       kakaoMapAdmin = new kakao.maps.Map(qs("adminMapViewport"), { center: centerLL, level: 8 });
