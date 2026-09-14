@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>오산시 우리동네 신고소</title>
-<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=2b594f6d29a609602b0ef4813af2f668&autoload=false"></script>
 </head>
 <body>
 <style id="app-style">
@@ -429,7 +428,7 @@ input,select,textarea{font-family:inherit;font-size:inherit;color:inherit;}
             <button class="logoutBtn" id="adminLogoutBtn" type="button">로그아웃</button>
           </span>
         </div>
-        <p class="hint" style="margin-top:-4px;">신고를 지우려면 연결된 스프레드시트에서 해당 행을 직접 삭제해주세요.</p>
+        <p class="hint" style="margin-top:-4px;">신고 카드의 "삭제" 버튼을 누르면 지도와 목록에서 바로 사라져요. (원본 응답은 연결된 스프레드시트에 그대로 남아요)</p>
         <div class="gateWrap changePwPanel" id="changePwPanel" hidden>
           <h3 style="margin-top:0;">비밀번호 변경</h3>
           <input class="textInput" type="password" id="changePwCurrentInput" placeholder="현재 비밀번호" autocomplete="off">
@@ -478,13 +477,69 @@ var GSHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR9wfHYkoF
 var GSHEET_EDIT_URL = "";
 var REPORTS_REFRESH_MS = 45000;
 
+/* ---- 신고 삭제(앱 안에서만 숨기기) ----
+   원본 구글 설문지 응답 행은 그대로 남지만, 별도의 "삭제 요청" 설문지에 신고 ID를
+   보내고, 그 ID 목록에 있는 신고는 지도/목록에서 걸러서 보여주지 않는다. 아래 세
+   값이 비어있으면(설정 전) 이 기기에서 누른 삭제만 이 기기에서 계속 유지된다. */
+var DELETE_GFORM_ACTION_URL = "https://docs.google.com/forms/d/e/1FAIpQLScNfISTlqANbHlQiAd5QU2nCnys9tySbdfgwdhjdXIE2qL6Xg/formResponse";
+var DELETE_GFORM_ENTRY_ID = "entry.1678177101";
+var GSHEET_DELETES_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSCQz_wyKqCZ6aUOC5b3hOeqQkjmETjrZXOlidlhfxjTt1fVXApSgzyDqYpT_xboRKnneE53oJXwEuZ/pub?output=csv";
+var LOCAL_DELETED_KEY = "osan_deleted_ids_v1";
+var deletedIdsRemote = {};
+
+function loadLocalDeletedIds() {
+  try {
+    var raw = localStorage.getItem(LOCAL_DELETED_KEY);
+    var arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) { return []; }
+}
+function addLocalDeletedId(id) {
+  try {
+    var arr = loadLocalDeletedIds();
+    if (arr.indexOf(id) === -1) arr.push(id);
+    localStorage.setItem(LOCAL_DELETED_KEY, JSON.stringify(arr));
+  } catch (e) { /* ignore */ }
+}
+function isDeletedId(id) {
+  return !!deletedIdsRemote[id] || loadLocalDeletedIds().indexOf(id) !== -1;
+}
+function loadDeletedIdsRemote() {
+  if (!GSHEET_DELETES_CSV_URL) return Promise.resolve({});
+  return fetch(GSHEET_DELETES_CSV_URL, { cache: "no-store" }).then(function (res) {
+    return res.ok ? res.text() : "";
+  }).then(function (text) {
+    var rows = parseCSV(text);
+    var map = {};
+    for (var i = 1; i < rows.length; i++) {
+      var id = ((rows[i][1] || rows[i][0] || "") + "").trim();
+      if (id) map[id] = true;
+    }
+    return map;
+  }).catch(function () { return {}; });
+}
+function submitDeleteRequest(reportId) {
+  if (!DELETE_GFORM_ACTION_URL || !DELETE_GFORM_ENTRY_ID) return Promise.resolve({ ok: false });
+  var body = new URLSearchParams();
+  body.set(DELETE_GFORM_ENTRY_ID, reportId);
+  return fetch(DELETE_GFORM_ACTION_URL, { method: "POST", mode: "no-cors", body: body })
+    .then(function () { return { ok: true }; })
+    .catch(function (err) { return { ok: false, message: err && err.message }; });
+}
+
 /* ---- 지도 엔진 설정 ----
    "image" = 지도를 하나의 이미지로 미리 만들어 파일 안에 넣는 방식 (인터넷 없이도 지도가 보임).
    "kakao" = 카카오맵을 실시간으로 불러오는 방식 (더 선명하고 확대가 자유롭지만, 등록된
    주소(도메인)에서 인터넷에 연결된 상태로만 지도가 보임). build.py가 배포 대상에 맞게
    이 두 값을 바꿔서 각각의 파일을 만들어낸다. */
 var MAP_ENGINE = "kakao";
-var KAKAO_APP_KEY = "2b594f6d29a609602b0ef4813af2f668";
+var KAKAO_APP_KEY = "59e9a9e82b133d70c24df4689d7340a5";
+
+/* 관리자 비밀번호를 여러 기기가 함께 쓰도록, 선생님이 정한 비밀번호의 해시값을
+   빌드할 때 미리 넣어둔다(아래 값은 build.py/build_kakao.py가 채워 넣음). 이 값이
+   있으면 "처음 여는 사람이 비밀번호를 새로 만드는" 화면 없이, 바로 로그인만 하도록
+   동작한다 - 아무나 자기 비밀번호를 설정해서 관리자가 될 수 없도록 하기 위함. */
+var ADMIN_PASSWORD_HASH = "511425f1125b98b09c7b636c27a56b0be1fff185717d5233144fd02ddf0cddab";
 
 /* 오산시 지도 범위(신고 위치가 이 안에 있는지 확인할 때 공통으로 사용) */
 var OSAN_BOUNDS = { minLat: 37.085, maxLat: 37.218, minLon: 126.975, maxLon: 127.161 };
@@ -681,10 +736,14 @@ function parseCSV(text) {
 
 /* ---- 신고 데이터: Google 스프레드시트(웹에 게시된 CSV)에서 읽어오기 ---- */
 function loadReports() {
-  return fetch(GSHEET_CSV_URL, { cache: "no-store" }).then(function (res) {
-    if (!res.ok) return [];
-    return res.text();
-  }).then(function (text) {
+  return Promise.all([
+    fetch(GSHEET_CSV_URL, { cache: "no-store" }).then(function (res) {
+      return res.ok ? res.text() : "";
+    }).catch(function () { return ""; }),
+    loadDeletedIdsRemote()
+  ]).then(function (results) {
+    var text = results[0];
+    deletedIdsRemote = results[1];
     var rows = parseCSV(text);
     if (rows.length < 2) return [];
     var out = [];
@@ -695,7 +754,7 @@ function loadReports() {
       var lng = parseFloat(r[7]);
       if (!isFinite(lat) || !isFinite(lng)) continue;
       var id = (r[1] || "").trim();
-      if (!id) continue;
+      if (!id || isDeletedId(id)) continue;
       var cat = categoryByLabel((r[5] || "").trim());
       out.push({
         id: id,
@@ -761,11 +820,14 @@ var LOCAL_CONFIG_KEY = "osan_admin_config_v1";
 function loadConfig() {
   try {
     var raw = localStorage.getItem(LOCAL_CONFIG_KEY);
-    var obj = raw ? JSON.parse(raw) : {};
-    return Promise.resolve((obj && typeof obj === "object") ? obj : {});
-  } catch (e) {
-    return Promise.resolve({});
-  }
+    var obj = raw ? JSON.parse(raw) : null;
+    if (obj && typeof obj === "object" && obj.adminPasswordHash) {
+      return Promise.resolve(obj);
+    }
+  } catch (e) { /* ignore */ }
+  /* 이 기기에서 따로 바꾼 적이 없으면, 선생님이 정해서 파일에 미리 넣어둔
+     공용 비밀번호를 기본값으로 쓴다 */
+  return Promise.resolve(ADMIN_PASSWORD_HASH ? { adminPasswordHash: ADMIN_PASSWORD_HASH } : {});
 }
 
 function publishConfig(nextConfig) {
@@ -1468,8 +1530,32 @@ function renderAdminReportList() {
       '<div class="who">' + escapeHtml(r.classNo) + '반 ' + escapeHtml(r.studentId) + ' ' + escapeHtml(r.studentName) + '</div>' +
       (r.memo ? '<div class="memo">' + escapeHtml(r.memo) + '</div>' : "") +
       '<div class="time">' + timeAgoLabel(r.createdAt) + (r.__local ? " · 전송 중" : "") + '</div>' +
+      '<button type="button" class="delBtn" data-del-id="' + escapeHtml(r.id) + '">삭제</button>' +
       '</div></div>';
   }).join("");
+  wrap.querySelectorAll(".delBtn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var id = btn.getAttribute("data-del-id");
+      if (!id) return;
+      if (!window.confirm("이 신고를 지도와 목록에서 삭제할까요? (학생 화면에서도 사라져요)")) return;
+      deleteReportById(id);
+    });
+  });
+}
+
+/* 관리자가 신고를 삭제하면: 이 화면에서 즉시 사라지고(낙관적 업데이트), 이 기기의
+   삭제 목록에도 남겨서 새로고침해도 계속 숨겨지며, 공용 "삭제 요청" 설문지가
+   연결되어 있으면 다른 기기에도 전달되도록 전송한다. 원본 응답 행 자체는 지우지
+   않으므로, 완전히 없애려면 스프레드시트에서 직접 지워야 한다. */
+function deleteReportById(id) {
+  addLocalDeletedId(id);
+  REPORTS = REPORTS.filter(function (r) { return r.id !== id; });
+  renderMarkers(REPORTS, qs("markersLayer"), onMainMarkerClick);
+  renderMarkers(applyClassFilter(REPORTS), qs("adminMarkersLayer"), onAdminMarkerClick);
+  updateCountPill();
+  renderAdminClassFilterChips();
+  renderAdminReportList();
+  submitDeleteRequest(id);
 }
 
 function initAdminEvents() {
@@ -1750,9 +1836,43 @@ function startApp() {
   });
 }
 
-function bootInit() {
-  if (MAP_ENGINE === "kakao" && window.kakao && window.kakao.maps && window.kakao.maps.load) {
+/* 카카오맵 SDK는 가끔(네트워크 문제 등으로) 첫 시도에서 조용히 로드에 실패할 때가
+   있어서, 실패하면 잠깐 쉬었다가 몇 번 더 새로 불러와본 뒤에만 "지도를 불러오지
+   못했어요" 안내를 보여준다. */
+function loadKakaoSdkAndStart(attemptsLeft) {
+  if (window.kakao && window.kakao.maps && window.kakao.maps.load) {
     kakao.maps.load(startApp);
+    return;
+  }
+  if (attemptsLeft <= 0) {
+    startApp();
+    return;
+  }
+  var s = document.createElement("script");
+  s.src = "https://dapi.kakao.com/v2/maps/sdk.js?appkey=" + KAKAO_APP_KEY + "&autoload=false";
+  var settled = false;
+  function retry() {
+    if (settled) return;
+    settled = true;
+    setTimeout(function () { loadKakaoSdkAndStart(attemptsLeft - 1); }, 500);
+  }
+  s.onload = function () {
+    if (settled) return;
+    settled = true;
+    if (window.kakao && window.kakao.maps && window.kakao.maps.load) {
+      kakao.maps.load(startApp);
+    } else {
+      setTimeout(function () { loadKakaoSdkAndStart(attemptsLeft - 1); }, 500);
+    }
+  };
+  s.onerror = retry;
+  setTimeout(retry, 4000); /* 로드도 onerror도 안 뜨고 그냥 멈춰있는 경우 대비 */
+  document.head.appendChild(s);
+}
+
+function bootInit() {
+  if (MAP_ENGINE === "kakao") {
+    loadKakaoSdkAndStart(4);
   } else {
     startApp();
   }
