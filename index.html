@@ -190,12 +190,14 @@ input,select,textarea{font-family:inherit;font-size:inherit;color:inherit;}
   box-shadow:0 3px 0 rgba(0,0,0,.15);transition:transform .1s ease;
 }
 .mapBtn:active{transform:translateY(2px);box-shadow:0 1px 0 rgba(0,0,0,.15);}
+.legendToggleBtn{display:none;font-size:1.05rem;}
 .legend{
   position:absolute;left:14px;bottom:14px;z-index:5;
   background:var(--surface);border:2px solid var(--border);border-radius:var(--radius-sm);
   padding:10px 12px;font-size:0.76rem;color:var(--text);
   box-shadow:0 3px 0 rgba(0,0,0,.12);
   display:grid;grid-template-columns:auto auto;gap:4px 10px;
+  max-height:calc(100% - 28px);overflow-y:auto;
 }
 .legend .dot{width:11px;height:11px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle;}
 .attribution{
@@ -345,6 +347,15 @@ input,select,textarea{font-family:inherit;font-size:inherit;color:inherit;}
   .adminBody{flex-direction:column;}
   .adminSidebar{width:auto;flex:0 0 auto;border-left:none;border-top:3px solid var(--border);max-height:46vh;}
   .topbar{flex-wrap:wrap;gap:8px;}
+  /* 좁은 화면에서는 12개 카테고리 범례가 지도를 너무 많이 가려서, 기본적으로
+     숨겨두고 팔레트 버튼(🎨)을 눌렀을 때만 작고 촘촘하게 펼쳐 보여준다. */
+  .legendToggleBtn{display:flex;}
+  .legend{
+    grid-template-columns:repeat(2,auto);
+    font-size:0.68rem;gap:3px 8px;padding:8px 10px;
+    max-width:min(220px, calc(100% - 60px));max-height:min(50%, 200px);
+  }
+  .legend .dot{width:9px;height:9px;margin-right:4px;}
 }
 
 </style>
@@ -375,6 +386,7 @@ input,select,textarea{font-family:inherit;font-size:inherit;color:inherit;}
         <button class="mapBtn" id="zoomInBtn" title="확대" aria-label="확대">+</button>
         <button class="mapBtn" id="zoomOutBtn" title="축소" aria-label="축소">&minus;</button>
         <button class="mapBtn" id="zoomResetBtn" title="처음으로" aria-label="처음 화면으로">&#8634;</button>
+        <button class="mapBtn legendToggleBtn" id="legendToggleBtn" title="카테고리 색깔 보기" aria-label="카테고리 색깔 보기">🎨</button>
       </div>
       <div class="pickBanner" id="pickBanner" hidden>
         지도를 클릭해서 위치를 표시하세요
@@ -393,7 +405,7 @@ input,select,textarea{font-family:inherit;font-size:inherit;color:inherit;}
           <label for="photoInput">사진</label>
           <label class="photoDrop" id="photoDropLabel">
             <span id="photoDropText">탭해서 사진 찍기 / 선택하기</span>
-            <input type="file" id="photoInput" accept="image/*" capture="environment">
+            <input type="file" id="photoInput" accept="image/*">
           </label>
           <img id="photoPreview" class="photoPreview" hidden alt="선택한 사진 미리보기">
           <div class="locStatus" id="locStatus">아직 사진이 없어요.</div>
@@ -454,6 +466,7 @@ input,select,textarea{font-family:inherit;font-size:inherit;color:inherit;}
           <button class="mapBtn" id="adminZoomInBtn" title="확대" aria-label="확대">+</button>
           <button class="mapBtn" id="adminZoomOutBtn" title="축소" aria-label="축소">&minus;</button>
           <button class="mapBtn" id="adminZoomResetBtn" title="처음으로" aria-label="처음 화면으로">&#8634;</button>
+          <button class="mapBtn legendToggleBtn" id="adminLegendToggleBtn" title="카테고리 색깔 보기" aria-label="카테고리 색깔 보기">🎨</button>
         </div>
         <div class="legend" id="adminLegend"></div>
       </div>
@@ -923,6 +936,18 @@ function renderLegend(el) {
   }).join("");
 }
 
+/* 좁은(휴대폰) 화면에서는 12개 카테고리 범례가 지도를 너무 많이 가리기 때문에
+   기본적으로 접어두고, 팔레트 버튼을 누르면 펼쳐 볼 수 있게 한다. 넓은 화면에서는
+   원래대로 항상 펼쳐 보여준다. */
+function initLegendToggle(btn, legendEl) {
+  if (!btn || !legendEl) return;
+  var isNarrow = window.matchMedia && window.matchMedia("(max-width: 860px)").matches;
+  legendEl.hidden = isNarrow;
+  btn.addEventListener("click", function () {
+    legendEl.hidden = !legendEl.hidden;
+  });
+}
+
 /* ---- 지도 팬/줌 ---- */
 function makePanZoom(viewportEl, stageEl, view, imgW, imgH) {
   function apply() {
@@ -1349,13 +1374,26 @@ function setLocStatus(text, kind) {
 /* 사진 자체에 위치 정보(EXIF GPS)가 없을 때 쓰는 대안: 사진을 찍은/고른 바로 그 순간
    학생이 있는 위치를 브라우저의 위치 서비스로 확인한다. 휴대폰 카메라 앱 대부분이
    기본적으로는 사진에 위치를 남기지 않기 때문에, 실제로는 이 경로가 훨씬 자주 쓰인다.
-   처음 한 번은 브라우저가 "위치 정보를 사용하시겠습니까?" 허가 팝업을 띄운다. */
+   처음 한 번은 브라우저가 "위치 정보를 사용하시겠습니까?" 허가 팝업을 띄운다.
+
+   실내(교실)에서는 GPS 신호가 잘 안 잡혀서 정확도를 우선하는 첫 시도가 시간 초과되는
+   경우가 흔하다(특히 아이폰). 그래서 그럴 때는 정확도를 낮춰(기지국/Wi-Fi 기반) 한
+   번 더 시도해서, 완벽하지 않아도 "대략 이 근처" 위치라도 잡히도록 한다. 권한 자체를
+   거부한 경우(code 1)는 다시 시도해도 소용없으므로 바로 실패로 처리한다. */
 function tryDeviceGeolocation(onSuccess, onFail) {
-  if (!navigator.geolocation) { onFail(); return; }
+  if (!navigator.geolocation) { onFail({ code: 0 }); return; }
   navigator.geolocation.getCurrentPosition(
     function (pos) { onSuccess(pos.coords.latitude, pos.coords.longitude); },
-    function () { onFail(); },
-    { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+    function (err) {
+      if (err && err.code === 1) { onFail(err); return; }
+      /* 정확도 우선 시도가 실패/시간초과(실내 등) -> 정확도를 낮춰 한 번 더 */
+      navigator.geolocation.getCurrentPosition(
+        function (pos) { onSuccess(pos.coords.latitude, pos.coords.longitude); },
+        function (err2) { onFail(err2 || err); },
+        { enableHighAccuracy: false, timeout: 12000, maximumAge: 300000 }
+      );
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
   );
 }
 
@@ -1365,8 +1403,15 @@ function isLatLngInsideMap(lat, lon) {
     : isInsideMap(lonLatToImageXY(lat, lon).x, lonLatToImageXY(lat, lon).y);
 }
 
+function geolocationFailMessage(err) {
+  var code = err && err.code;
+  if (code === 1) return "위치 권한이 꺼져 있어요. 브라우저(또는 기기) 설정에서 이 사이트의 위치 권한을 허용한 뒤 다시 시도해주세요. 지도를 클릭해서 위치를 표시할 수도 있어요.";
+  if (code === 3) return "위치를 찾는 데 시간이 너무 오래 걸려요(실내이거나 신호가 약할 수 있어요). 지도를 클릭해서 위치를 표시해주세요.";
+  return "위치 정보를 가져올 수 없어요. 지도를 클릭해서 위치를 표시해주세요.";
+}
+
 function useDeviceLocationForPending() {
-  setLocStatus("사진에 위치 정보가 없어서, 지금 계신 위치를 대신 확인하고 있어요...", "");
+  setLocStatus("사진에 위치 정보가 없어서, 지금 계신 위치를 대신 확인하고 있어요... (위치 권한을 물어보면 허용해주세요)", "");
   tryDeviceGeolocation(function (lat, lng) {
     if (isLatLngInsideMap(lat, lng)) {
       pending.lat = lat; pending.lon = lng; pending.source = "geo";
@@ -1377,8 +1422,8 @@ function useDeviceLocationForPending() {
       startPickMode();
     }
     updateSubmitEnabled();
-  }, function () {
-    setLocStatus("위치 정보를 가져올 수 없어요. 지도를 클릭해서 위치를 표시해주세요.", "warn");
+  }, function (err) {
+    setLocStatus(geolocationFailMessage(err), "warn");
     startPickMode();
     updateSubmitEnabled();
   });
@@ -1497,6 +1542,7 @@ function initFormEvents() {
     mainPZ.zoomAt(1 / 1.3, r.left + r.width / 2, r.top + r.height / 2);
   });
   qs("zoomResetBtn").addEventListener("click", function () { mainPZ.fit(); });
+  initLegendToggle(qs("legendToggleBtn"), qs("legend"));
 
   qs("reportForm").addEventListener("submit", function (e) {
     e.preventDefault();
@@ -1658,6 +1704,7 @@ function initAdminEvents() {
     adminPZ.zoomAt(1 / 1.3, r.left + r.width / 2, r.top + r.height / 2);
   });
   qs("adminZoomResetBtn").addEventListener("click", function () { adminPZ.fit(); });
+  initLegendToggle(qs("adminLegendToggleBtn"), qs("adminLegend"));
 
   if (GSHEET_EDIT_URL && qs("adminSheetLinkBtn")) {
     qs("adminSheetLinkBtn").hidden = false;
